@@ -1,0 +1,6 @@
+# nix build output
+result
+result-*
+
+# cargo
+/target

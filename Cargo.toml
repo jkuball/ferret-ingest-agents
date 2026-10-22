@@ -1,0 +1,19 @@
+[package]
+name = "ferret-ingest-agents"
+version = "0.1.0"
+edition = "2024"
+description = "Index coding agent sessions into ferret"
+license = "MIT"
+repository = "https://github.com/jkuball/ferret-ingest-agents"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+gethostname = "1.1.0"
+globset = "0.4.20"
+minijinja = { version = "3.0.2", features = ["serde", "json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+toml = "1.1.8"
+ureq = { version = "3.5.0", features = ["json"] }

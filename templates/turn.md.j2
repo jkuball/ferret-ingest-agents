@@ -1,0 +1,65 @@
+{#-
+  One turn: a user message and everything up to the next one.
+
+  Context:
+    harness  {name, label}, e.g. {name: "pi", label: "Pi"}
+    host     the machine, e.g. "laptop"
+    cwd      the session's working directory, as recorded
+    parts    in order, each with
+      kind     user, assistant, thinking, tools or extension
+      text     the text (not for tools)
+      speaker  "user", "agent", or an extension's type
+      first    whether the speaker changed with this part
+      at       the entry's timestamp (RFC 3339), or none
+      model    the model of an agent part, or none
+      command  (user) true for a slash command or loaded skill
+      calls    (tools) [{name, arguments, result}], arguments as the model
+               wrote them, result {bytes, lines, error} or none
+      type     (extension) the extension's message type
+
+  Copies of a turn in other branches render the same context, so ferret
+  embeds them once. Session-specific data (file, id, title) isn't offered.
+
+  Filters: time, bytes, quote(header?), fence, one_line(n), home, and
+  minijinja's own, like tojson.
+-#}
+{% for part in parts %}
+{% if part.first %}
+{#- No rule at the very top: ferret would read it as front matter. #}
+{% if not loop.first %}
+
+---
+{% endif %}
+**{% if part.at %}{{ part.at | time }} · {% endif %}{% if part.speaker == "user" %}User{% elif part.speaker == "summary" %}Summary{% elif part.speaker == "agent" %}Agent{% if part.model %} ({{ part.model }}){% endif %}{% else %}{{ part.speaker }}{% endif %}**
+
+{% endif %}
+{% if part.kind == "tools" %}
+{% for call in part.calls %}
+{% set args = call.arguments %}
+{% set detail = args.command or args.path or args.file_path or args.pattern or args.url or args.code %}
+{#- Pi's mcp tool names the server and tool as arguments. #}
+{% if not detail and call.name == "mcp" and args.tool %}
+{% set detail = (args.server ~ " " if args.server else "") ~ args.tool ~ (" " ~ (args.args | tojson) if args.args else "") %}
+{% endif %}
+{#- Any other tool: its arguments as they are. #}
+{% if not detail and args %}
+{% set detail = args | tojson %}
+{% endif %}
+{% set r = call.result %}
+- **{{ call.name }}**
+{% if detail %}
+  - -> {{ detail | one_line(300) | code }}
+{% endif %}
+{% if r %}
+  - <- {{ "failed" if r.error else "ok" }} · {{ r.lines }} line{{ "" if r.lines == 1 else "s" }}, {{ r.bytes | bytes }}
+{% else %}
+  - <- no result
+{% endif %}
+{% endfor %}
+{% elif part.kind == "thinking" %}
+{#- Left out; `{{ part.text | quote("Thinking") }}` would show it. #}
+{% else %}
+{{ part.text }}
+{% endif %}
+
+{% endfor %}
