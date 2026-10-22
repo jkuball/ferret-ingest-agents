@@ -27,12 +27,10 @@ Find out whether celld works with my Ceph S3.
 ---
 **2026-10-18 09:01 UTC · Agent (gpt-5.6-sol)**
 
-- **bash**
-  - -> `rg -n -i "ceph|s3|bucket" . --glob '!manifests/**'`
-  - <- ok · 291 lines, 51.3 KB
-- **read**
-  - -> `/tmp/celld/crates/celld/bucket.rs`
-  - <- ok · 51 lines, 1.9 KB
+- **bash** `rg -n -i "ceph|s3|bucket" . --glob '!manifests/**'`
+  - ok · 291 lines, 51.3 KB
+- **read** `/tmp/celld/crates/celld/bucket.rs`
+  - ok · 51 lines, 1.9 KB
 
 celld probes the bucket with a conditional write on startup…
 ````

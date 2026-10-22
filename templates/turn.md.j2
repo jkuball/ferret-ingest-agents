@@ -46,14 +46,11 @@
 {% set detail = args | tojson %}
 {% endif %}
 {% set r = call.result %}
-- **{{ call.name }}**
-{% if detail %}
-  - -> {{ detail | one_line(300) | code }}
-{% endif %}
+- **{{ call.name }}**{{ (" " ~ (detail | one_line(300) | code)) if detail else "" }}
 {% if r %}
-  - <- {{ "failed" if r.error else "ok" }} · {{ r.lines }} line{{ "" if r.lines == 1 else "s" }}, {{ r.bytes | bytes }}
+  - {{ "failed" if r.error else "ok" }} · {{ r.lines }} line{{ "" if r.lines == 1 else "s" }}, {{ r.bytes | bytes }}
 {% else %}
-  - <- no result
+  - no result
 {% endif %}
 {% endfor %}
 {% elif part.kind == "thinking" %}

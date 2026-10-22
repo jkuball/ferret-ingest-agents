@@ -85,7 +85,7 @@ fn a_linear_session_is_one_thread_of_turns() {
     assert!(
         turns[0]
             .text
-            .contains("First answer\n\n- **bash**\n  - -> `ls -la`\n  - <- failed · 1 line, 15 B")
+            .contains("First answer\n\n- **bash** `ls -la`\n  - failed · 1 line, 15 B")
     );
     assert!(!turns[0].text.contains("raw tool output"));
     assert!(!turns[0].text.contains("private reasoning"));
@@ -171,7 +171,7 @@ fn a_tool_call_shows_how_much_came_back_but_not_what() {
     let turn = turns(&docs)[0];
     assert!(
         turn.text
-            .contains("- **bash**\n  - -> `ls -la`\n  - <- failed · 1 line, 15 B")
+            .contains("- **bash** `ls -la`\n  - failed · 1 line, 15 B")
     );
     assert!(!turn.text.contains("raw tool output"));
     assert!(!turn.text.contains("private reasoning"));
@@ -251,8 +251,8 @@ fn a_tool_call_says_whether_it_worked() {
         assistant("02", "01", "A"),
         ok,
     ]);
-    assert!(turns(&docs)[0].text.contains("  - <- ok · 2 lines, 3 B"));
+    assert!(turns(&docs)[0].text.contains("  - ok · 2 lines, 3 B"));
 
     let docs = render(&[header(), user("01", None, "Q"), assistant("02", "01", "A")]);
-    assert!(turns(&docs)[0].text.contains("  - <- no result"));
+    assert!(turns(&docs)[0].text.contains("  - no result"));
 }
