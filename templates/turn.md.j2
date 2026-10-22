@@ -17,8 +17,8 @@
                wrote them, result {bytes, lines, error} or none
       type     (extension) the extension's message type
 
-  Copies of a turn in other branches render the same context, so ferret
-  embeds them once. Session-specific data (file, id, title) isn't offered.
+  Session-specific data (file, id, title) isn't offered: a turn reads the
+  same wherever its session file lives.
 
   Filters: time, bytes, quote(header?), fence, one_line(n), home, and
   minijinja's own, like tojson.

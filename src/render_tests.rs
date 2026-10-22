@@ -91,7 +91,8 @@ fn a_linear_session_is_one_thread_of_turns() {
     assert!(!turns[0].text.contains("private reasoning"));
     assert!(!turns[0].text.contains("noise"));
     // The hidden entries between them don't break the chain.
-    assert_eq!(turns[1].meta["parent_entry"], "02");
+    assert_eq!(turns[0].parent, None);
+    assert_eq!(turns[1].parent.as_deref(), Some("turn:s1:01"));
 }
 
 #[test]
@@ -123,7 +124,7 @@ fn a_summary_before_the_first_message_opens_the_first_turn() {
 }
 
 #[test]
-fn each_branch_is_a_thread_and_shared_turns_are_copied_identically() {
+fn a_fork_is_two_turns_with_the_same_parent_in_one_thread() {
     let docs = render(&[
         header(),
         user("01", None, "Shared"),
@@ -131,24 +132,16 @@ fn each_branch_is_a_thread_and_shared_turns_are_copied_identically() {
         user("03", Some("02"), "Left"),
         user("04", Some("02"), "Right"),
     ]);
-    let mut threads: Vec<_> = docs.iter().map(|d| d.thread.clone().unwrap()).collect();
-    threads.dedup();
-    // The branch written last is the main one.
-    assert_eq!(threads, ["s1", "s1#03"]);
-
-    let shared: Vec<_> = turns(&docs)
-        .into_iter()
-        .filter(|d| d.meta["entry"] == "01")
-        .collect();
-    assert_eq!(shared.len(), 2);
-    assert_ne!(shared[0].external_id, shared[1].external_id);
-    // Equal title and text let ferret's embedding cache serve the copy.
-    assert_eq!(shared[0].title, shared[1].title);
-    assert_eq!(shared[0].text, shared[1].text);
+    assert!(docs.iter().all(|d| d.thread.as_deref() == Some("s1")));
+    let ids: Vec<_> = docs.iter().map(|d| d.external_id.as_str()).collect();
+    assert_eq!(ids, ["turn:s1:01", "turn:s1:03", "turn:s1:04"]);
+    assert_eq!(docs[0].parent, None);
+    assert_eq!(docs[1].parent.as_deref(), Some("turn:s1:01"));
+    assert_eq!(docs[2].parent.as_deref(), Some("turn:s1:01"));
 }
 
 #[test]
-fn a_retried_reply_without_new_user_messages_is_no_branch() {
+fn a_retried_reply_without_new_user_messages_is_no_fork() {
     let docs = render(&[
         header(),
         user("01", None, "Question"),
@@ -156,8 +149,8 @@ fn a_retried_reply_without_new_user_messages_is_no_branch() {
         assistant("03", "01", "Retry"),
         user("04", Some("03"), "Thanks"),
     ]);
-    assert!(docs.iter().all(|d| d.thread.as_deref() == Some("s1")));
     assert_eq!(turns(&docs).len(), 2);
+    assert_eq!(docs[1].parent.as_deref(), Some("turn:s1:01"));
 }
 
 #[test]
@@ -178,22 +171,26 @@ fn a_tool_call_shows_how_much_came_back_but_not_what() {
 }
 
 #[test]
-fn the_main_branch_is_where_the_session_went_on_not_the_abandoned_one() {
-    let docs = render(&[
+fn going_on_from_an_earlier_turn_keeps_every_id() {
+    let before = render(&[
         header(),
         user("01", None, "Start"),
         assistant("02", "01", "Answer"),
-        user("03", Some("02"), "Abandoned"),
-        user("04", Some("02"), "Went on"),
-        assistant("05", "04", "More"),
-        user("06", Some("05"), "Later"),
+        user("03", Some("02"), "First try"),
+        assistant("05", "03", "More"),
     ]);
-    let main: Vec<_> = turns(&docs)
-        .into_iter()
-        .filter(|d| d.thread.as_deref() == Some("s1"))
-        .map(|d| d.title.as_str())
-        .collect();
-    assert_eq!(main, ["Start", "Went on", "Later"]);
+    let after = render(&[
+        header(),
+        user("01", None, "Start"),
+        assistant("02", "01", "Answer"),
+        user("03", Some("02"), "First try"),
+        assistant("05", "03", "More"),
+        user("06", Some("02"), "Second try"),
+    ]);
+    for doc in &before {
+        assert!(after.contains(doc), "{} changed", doc.external_id);
+    }
+    assert_eq!(after[2].parent.as_deref(), Some("turn:s1:01"));
 }
 
 #[test]

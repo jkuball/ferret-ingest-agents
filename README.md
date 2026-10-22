@@ -17,7 +17,9 @@ Supported harnesses:
 
 One **document per turn**: a user message and everything up to the next one.
 Every session is a ferret **thread**, so search hits collapse to one per
-session and the viewer pages through it. A turn reads like this:
+session and the viewer shows it as a whole. Each turn names the turn it went
+on from as its `parent`, so where you went back and tried again, the thread
+forks like the session did. A turn reads like this:
 
 ````markdown
 **2026-10-18 09:00 UTC · User**
@@ -58,15 +60,6 @@ through MCP or the API:
 | `session`, `session_name`, `session_started` | the session's id, name and start |
 | `models` | the models in the session |
 | `parent_session` | the session this one was forked from |
-| `branch` | the entry where this branch leaves the session |
-
-### Branches
-
-Sessions are trees: you go back and try again, a reply is retried, a session
-is forked. Every branch becomes its own thread; the branch that went on last
-keeps the session's id, the others get `<session>#<entry>`. Turns that
-branches share are copied into each, byte for byte, so ferret's embedding
-cache embeds them only once. A search may show such a turn once per branch.
 
 ## Installation
 
@@ -185,7 +178,7 @@ ferret-ingest-agents render <session>     # print the documents, as JSON lines
 
 Runs are incremental. A state file remembers what each session file produced,
 so unchanged files are skipped and only documents whose content changed are
-sent. Turns and branches that disappear are deleted from ferret, as are
+sent. Turns that disappear are deleted from ferret, as are
 sessions you exclude later. A deleted session file stays in ferret, as an
 archive. Changing the template or options renders everything again, still
 sending only what changed.

@@ -1,12 +1,11 @@
 //! Turning a session into ferret documents.
 //!
-//! Every branch of a session is one ferret thread: a session document as its
-//! overview, followed by one document per turn (a user message and everything
-//! up to the next one). A branch is a distinct sequence of user messages; a
-//! path whose user messages are a prefix of another path's, like a retried
-//! reply, is not one. Turns that branches share are written once per branch.
-//! Their text and title don't depend on the branch, so ferret's embedding
-//! cache serves the copies without embedding them again.
+//! A session is one ferret thread with one document per turn: a user message
+//! and every entry below it up to the next user message. Sessions are trees
+//! (you go back and try again, a reply is retried), and so is the thread: a
+//! turn's `parent` is the turn it went on from. Two turns with the same parent
+//! are a fork. Ids never depend on which branch went on later, so continuing
+//! a session anywhere, any time, keeps every existing document as it is.
 
 use std::collections::HashMap;
 
@@ -49,110 +48,12 @@ pub struct Document {
     pub text: String,
     pub url: Option<String>,
     pub thread: Option<String>,
+    /// The `external_id` of the turn this one went on from.
+    pub parent: Option<String>,
     pub authors: Vec<String>,
     pub created_at: Option<String>,
     pub modified_at: Option<String>,
     pub meta: Value,
-}
-
-pub struct Branch {
-    /// The entry where this branch leaves the main one; None for the main branch.
-    pub fork: Option<String>,
-    /// Indices into the session's entries, root first.
-    pub path: Vec<usize>,
-}
-
-/// The session's branches, main branch first. The main branch leads to the
-/// entry written last, which is where the agent resumes; every other branch
-/// is named by its first entry off the main branch.
-pub fn branches(session: &Session) -> Vec<Branch> {
-    let index: HashMap<&str, usize> = session
-        .entries
-        .iter()
-        .enumerate()
-        .map(|(i, e)| (e.id.as_str(), i))
-        .collect();
-    let mut children: HashMap<Option<usize>, Vec<usize>> = HashMap::new();
-    for (i, entry) in session.entries.iter().enumerate() {
-        let parent = entry.parent.as_deref().and_then(|p| index.get(p).copied());
-        children.entry(parent).or_default().push(i);
-    }
-
-    // Every root-to-leaf path; a leaf's index is when it was written.
-    let mut paths: Vec<Vec<usize>> = Vec::new();
-    let mut stack: Vec<(Option<usize>, Vec<usize>)> = vec![(None, Vec::new())];
-    while let Some((node, path)) = stack.pop() {
-        let kids = children.get(&node).map(Vec::as_slice).unwrap_or_default();
-        if kids.is_empty() {
-            if !path.is_empty() {
-                paths.push(path);
-            }
-            continue;
-        }
-        for &kid in kids.iter().rev() {
-            let mut next = path.clone();
-            next.push(kid);
-            stack.push((Some(kid), next));
-        }
-    }
-    let leaf = |p: &Vec<usize>| *p.last().unwrap();
-
-    // A branch is a distinct sequence of user messages: a path is dropped
-    // when another one's user messages extend its own, or equal them and the
-    // other was written later, like a reply that was retried.
-    let users: Vec<Vec<usize>> = paths
-        .iter()
-        .map(|p| {
-            p.iter()
-                .copied()
-                .filter(|&i| matches!(session.entries[i].content, Content::User { .. }))
-                .collect()
-        })
-        .collect();
-    let mut kept: Vec<Vec<usize>> = Vec::new();
-    for (i, path) in paths.iter().enumerate() {
-        let covered = users.iter().enumerate().any(|(j, other)| {
-            j != i
-                && other.starts_with(&users[i])
-                && (other.len() > users[i].len() || leaf(&paths[j]) > leaf(path))
-        });
-        if !covered {
-            kept.push(path.clone());
-        }
-    }
-
-    let Some(main) = kept.iter().max_by_key(|p| leaf(p)).cloned() else {
-        return Vec::new();
-    };
-    let on_main: std::collections::HashSet<usize> = main.iter().copied().collect();
-    let mut branches = vec![Branch {
-        fork: None,
-        path: main.clone(),
-    }];
-    for path in kept.into_iter().filter(|p| *p != main) {
-        let off = path.iter().find(|i| !on_main.contains(i)).copied();
-        branches.push(Branch {
-            fork: off.map(|i| session.entries[i].id.clone()),
-            path,
-        });
-    }
-    branches
-}
-
-pub fn documents(
-    session: &Session,
-    source: &str,
-    file: &str,
-    options: &Options,
-    templates: &Templates,
-) -> Result<Vec<Document>> {
-    let mut docs = Vec::new();
-    for branch in branches(session) {
-        docs.extend(branch_documents(
-            session, &branch, source, file, options, templates,
-        )?);
-    }
-    Ok(docs)
 }
 
 struct Turn<'a> {
@@ -184,38 +85,86 @@ impl Turn<'_> {
     }
 }
 
-fn branch_documents(
+pub fn documents(
     session: &Session,
-    branch: &Branch,
     source: &str,
     file: &str,
     options: &Options,
     templates: &Templates,
 ) -> Result<Vec<Document>> {
-    let thread = match &branch.fork {
-        None => session.id.clone(),
-        Some(fork) => format!("{}#{fork}", session.id),
+    let entries = &session.entries;
+    let index: HashMap<&str, usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.id.as_str(), i))
+        .collect();
+    let parent_of = |i: usize| -> Option<usize> {
+        entries[i]
+            .parent
+            .as_deref()
+            .and_then(|p| index.get(p).copied())
     };
+    let is_user = |i: usize| matches!(entries[i].content, Content::User { .. });
 
-    // What comes before the first user message, like a summary a forked
-    // session starts with, goes with the first turn.
+    // The turn an entry belongs to: its nearest user message, itself
+    // included. Bounded by the number of entries, so a cycle can't hang.
+    let owner = |mut i: usize| -> Option<usize> {
+        for _ in 0..=entries.len() {
+            if is_user(i) {
+                return Some(i);
+            }
+            i = parent_of(i)?;
+        }
+        None
+    };
+    let owners: Vec<Option<usize>> = (0..entries.len()).map(owner).collect();
+
+    let mut turns: HashMap<usize, Turn> = HashMap::new();
+    let mut order = Vec::new();
     let mut preamble = Vec::new();
-    let mut turns: Vec<Turn> = Vec::new();
-    for &i in &branch.path {
-        let entry = &session.entries[i];
-        match (&entry.content, turns.last_mut()) {
-            (Content::User { .. }, _) => turns.push(Turn {
-                user: entry,
-                before: std::mem::take(&mut preamble),
-                rest: Vec::new(),
-            }),
-            (_, Some(turn)) => turn.rest.push(entry),
-            (_, None) => preamble.push(entry),
+    for (i, entry) in entries.iter().enumerate() {
+        match owners[i] {
+            Some(u) if u == i => {
+                order.push(i);
+                turns.insert(
+                    i,
+                    Turn {
+                        user: entry,
+                        before: Vec::new(),
+                        rest: Vec::new(),
+                    },
+                );
+            }
+            Some(u) => {
+                if let Some(turn) = turns.get_mut(&u) {
+                    turn.rest.push(entry);
+                }
+            }
+            // What comes before any user message, like the summary a
+            // continued session starts with, goes with the first turn.
+            None => preamble.push(entry),
         }
     }
     // A command nobody answered, like one that only changes a setting, says
     // nothing worth finding.
-    turns.retain(|t| t.answered() || !is_command(t.user));
+    let kept = |u: &usize| turns[u].answered() || !is_command(turns[u].user);
+    order.retain(kept);
+    if let Some(first) = order.first() {
+        turns.get_mut(first).unwrap().before = preamble;
+    }
+
+    // The turn a turn went on from, past any that were dropped.
+    let parent_turn = |u: usize| -> Option<usize> {
+        let mut at = u;
+        for _ in 0..=entries.len() {
+            at = owners[parent_of(at)?]?;
+            if order.contains(&at) {
+                return Some(at);
+            }
+        }
+        None
+    };
+    let external_id = |u: usize| format!("turn:{}:{}", session.id, entries[u].id);
 
     let base_meta = json!({
         "harness": session.harness.name(),
@@ -227,14 +176,12 @@ fn branch_documents(
         "models": session.models,
         "cwd": session.cwd,
         "file": file,
-        "branch": branch.fork,
     });
 
     let mut docs = Vec::new();
-    for turn in &turns {
-        // Only what all copies of this turn share: no file, session or title,
-        // so the copies in forks and branches stay byte for byte the same.
-        let entries = turn
+    for &u in &order {
+        let turn = &turns[&u];
+        let parts = turn
             .before
             .iter()
             .copied()
@@ -244,19 +191,19 @@ fn branch_documents(
             harness: session.harness.into(),
             host: &options.host,
             cwd: &session.cwd,
-            parts: views::parts(entries),
+            parts: views::parts(parts),
         })?;
         let mut meta = base_meta.clone();
         meta["entry"] = json!(turn.user.id);
-        meta["parent_entry"] = json!(turn.user.parent);
         docs.push(Document {
             source: source.to_owned(),
-            external_id: format!("turn:{thread}:{}", turn.user.id),
+            external_id: external_id(u),
             content_type: "markdown",
             title: one_line(user_text(turn.user), TITLE_CHARS),
             text: cap(text),
             url: None,
-            thread: Some(thread.clone()),
+            thread: Some(session.id.clone()),
+            parent: parent_turn(u).map(external_id),
             authors: turn.authors(&options.user),
             created_at: turn.user.timestamp.clone(),
             modified_at: turn
