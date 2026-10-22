@@ -43,14 +43,24 @@ celld probes the bucket with a conditional write on startup…
   live elsewhere, and the same `SKILL.md` or `flake.nix` read in hundreds of
   sessions would otherwise match every search.
 - **Compaction summaries** where they happened.
-- **Thinking** is passed to the template but left out by default.
-- Slash commands and loaded skills as typed (`/compact`, `/skill:capture …`);
-  ones nobody answered are dropped.
+- **Slash commands and loaded skills** as you typed them (`/compact`,
+  `/skill:capture …`). A command the agent didn't answer, like one that only
+  changes a setting, is left out.
+- **Not thinking.** It can be turned on (see [Templates](#templates)).
 
-Where a turn comes from is in its `meta`, for agents reading through MCP or
-the API: `harness`, `host`, `cwd`, `file`, `session`, `session_name`,
-`session_started`, `models`, `parent_session`, `branch`. `authors` are you and
-the models that answered, so ferret can filter by model.
+Each turn's `authors` are you and the models that answered, so you can filter
+by model in ferret. Its `meta` says where it comes from, for agents reading
+through MCP or the API:
+
+| Field | |
+|---|---|
+| `harness`, `host` | which agent, on which machine |
+| `cwd` | the session's working directory |
+| `file` | the session file |
+| `session`, `session_name`, `session_started` | the session's id, name and start |
+| `models` | the models in the session |
+| `parent_session` | the session this one was forked from |
+| `branch` | the entry where this branch leaves the session |
 
 ### Branches
 
@@ -58,13 +68,13 @@ Sessions are trees: you go back and try again, a reply is retried, a session
 is forked. Every branch becomes its own thread; the branch that went on last
 keeps the session's id, the others get `<session>#<entry>`. Turns that
 branches share are copied into each, byte for byte, so ferret's embedding
-cache embeds them once. A search may show such a turn once per branch.
+cache embeds them only once. A search may show such a turn once per branch.
 
 ## Installation
 
-You need a ferret instance and an API key with `ingest:write` (Settings → API
-keys). Scope it to the machine's source, e.g. `laptop`: sources are
-`<host>/agents/<harness>`, so one key covers all agents of one machine.
+You need a ferret instance and an API key that may write documents
+(`ingest:write`). Documents go to the source `<host>/agents/<harness>`, so a
+key limited to `<host>` covers everything one machine sends.
 
 ### home-manager
 
@@ -83,10 +93,13 @@ inputs.ferret-ingest-agents.inputs.nixpkgs.follows = "nixpkgs";
     keyFile = "/run/secrets/ferret-ingest-agents"; # a path string, kept out of the store
     harnesses.pi.enable = true;
     harnesses.claude-code.enable = true;
+    # Sessions started below these directories stay on this machine.
     exclude = [ "~/work/**" ];
   };
 }
 ```
+
+Harnesses are off unless enabled; one that isn't installed is skipped.
 
 It runs every 15 minutes (`interval`): as a launchd agent on macOS (logs in
 `~/Library/Logs/ferret-ingest-agents.log`), as a systemd user timer on Linux.
@@ -104,43 +117,63 @@ services.ferret-ingest-agents = {
 };
 ```
 
-The modules are also published as `modules.{homeManager,nixos,darwin}.default`
-for [flake-parts](https://flake.parts/options/flake-parts-modules.html).
+### Without the modules
 
-### By hand
+With Nix but none of the above, install the package and write the config
+file (below) to `~/.config/ferret-ingest-agents/config.toml`:
 
 ```sh
-nix run github:jkuball/ferret-ingest-agents -- run --dry-run
+nix profile install github:jkuball/ferret-ingest-agents
+ferret-ingest-agents run --dry-run   # what would be sent
+ferret-ingest-agents run
 ```
 
-or `cargo build --release`, with a config file (below) at
-`$XDG_CONFIG_HOME/ferret-ingest-agents/config.toml`.
+Without Nix, `cargo install --git https://github.com/jkuball/ferret-ingest-agents`.
+
+To keep ferret up to date, run it every few minutes, e.g. with cron
+(`crontab -e`) on macOS and Linux alike:
+
+```
+*/15 * * * * ~/.nix-profile/bin/ferret-ingest-agents run >> /tmp/ferret-ingest-agents.log 2>&1
+```
 
 ## Configuration
 
-The modules write this file for you.
+The Nix modules write this file for you.
 
 ```toml
 url = "https://ferret.example.com"
-key_file = "~/.config/ferret-ingest-agents/key"   # or FERRET_KEY in the environment
+# A file with the API key. Or leave this out and set FERRET_KEY.
+key_file = "~/.config/ferret-ingest-agents/key"
 
-# host = "laptop"            # names the machine in sources; the short hostname by default
-# user = "alice"             # you, in every turn's authors; $USER by default
+# Names this machine in sources. The short hostname by default.
+# host = "laptop"
+
+# You, an author of every turn next to the models. $USER by default.
+# user = "alice"
+
+# Your own template for turns instead of the built-in one (see Templates).
 # turn_template = "~/.config/ferret-ingest-agents/turn.md.j2"
+
+# What earlier runs sent, so the next one only sends what changed.
 # state_file = "~/.local/state/ferret-ingest-agents/state.json"
+
+# How many session files are read and sent at once.
 # concurrency = 4
 
-# Globs on a session's working directory. `dir/**` covers dir and everything below.
+# Which sessions are indexed, as globs on their working directory: included,
+# and not excluded. `dir/**` covers dir and everything below it.
 include = ["**"]
 exclude = ["~/work/**"]
 
-# Each table turns a harness on.
+# One table per harness turns it on. Both settings are optional.
 [harnesses.pi]
-# sessions_dir = "~/.pi/agent/sessions"
-# source = "laptop/agents/pi"
+# sessions_dir = "~/.pi/agent/sessions"   # where its sessions are
+# source = "laptop/agents/pi"             # the ferret source; <host>/agents/pi by default
 
 [harnesses.claude-code]
 # sessions_dir = "~/.claude/projects"
+# source = "laptop/agents/claude-code"
 ```
 
 ## Usage
