@@ -13,6 +13,12 @@ in
       imports = [ generic ];
 
       config = lib.mkIf cfg.enable (lib.mkMerge [
+        {
+          # Where the CLI looks without --config, so a run by hand uses the
+          # same settings as the service.
+          xdg.configFile."ferret-ingest-agents/config.toml".source = cfg.configFile;
+        }
+
         (lib.mkIf pkgs.stdenv.hostPlatform.isDarwin {
           launchd.agents.ferret-ingest-agents = {
             enable = true;

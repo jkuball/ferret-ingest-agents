@@ -94,6 +94,8 @@ Harnesses are off unless enabled; one that isn't installed is skipped.
 
 It runs every 15 minutes (`interval`): as a launchd agent on macOS (logs in
 `~/Library/Logs/ferret-ingest-agents.log`), as a systemd user timer on Linux.
+The config also lands in `~/.config/ferret-ingest-agents/config.toml`, so
+`ferret-ingest-agents run` by hand uses the same settings.
 
 ### NixOS and nix-darwin
 
