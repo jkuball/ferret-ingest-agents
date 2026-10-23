@@ -113,7 +113,12 @@ pub struct Node<'a> {
 }
 
 /// Keeps the content nodes, each linked to its nearest content ancestor.
-pub fn link(nodes: Vec<Node>) -> Vec<Entry> {
+pub fn link(mut nodes: Vec<Node>) -> Vec<Entry> {
+    // Claude Code sometimes logs an entry again under a later parent. The
+    // first occurrence is where it happened; the later parent can descend from
+    // it, which would make the entry its own ancestor.
+    let mut seen = HashSet::new();
+    nodes.retain(|n| seen.insert(n.id));
     let parents: HashMap<&str, Option<&str>> = nodes.iter().map(|n| (n.id, n.parent)).collect();
     let content: HashSet<&str> = nodes
         .iter()

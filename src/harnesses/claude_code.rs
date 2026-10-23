@@ -247,6 +247,26 @@ mod tests {
     }
 
     #[test]
+    fn a_relogged_entry_keeps_its_first_parent() {
+        let text = lines(&[
+            json!({"type": "user", "uuid": "1", "parentUuid": null, "message": {"content": "Before"}}),
+            json!({"type": "user", "uuid": "2", "parentUuid": "1", "message": {"content": "/compact"}}),
+            json!({"type": "system", "uuid": "3", "parentUuid": "2"}),
+            json!({"type": "system", "uuid": "4", "parentUuid": "3"}),
+            json!({"type": "user", "uuid": "2", "parentUuid": "4", "message": {"content": "/compact"}}),
+            json!({"type": "system", "uuid": "5", "parentUuid": "2"}),
+            json!({"type": "user", "uuid": "6", "parentUuid": "5", "message": {"content": "After"}}),
+        ]);
+        let session = parse(&text, Path::new("/x/proj/s.jsonl")).unwrap();
+        let links: Vec<_> = session
+            .entries
+            .iter()
+            .map(|e| (e.id.as_str(), e.parent.as_deref()))
+            .collect();
+        assert_eq!(links, [("1", None), ("2", Some("1")), ("6", Some("2"))]);
+    }
+
+    #[test]
     fn a_subagent_is_its_own_session_under_its_parent() {
         let text = lines(&[
             json!({"type": "user", "uuid": "1", "parentUuid": null, "sessionId": "s",
