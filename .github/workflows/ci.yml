@@ -12,7 +12,6 @@ on:
         type: string
 
 permissions:
-  actions: write
   contents: read
 
 concurrency:
@@ -37,6 +36,7 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: read
 
       - uses: actions/checkout@v7
         with:
@@ -70,6 +70,9 @@ jobs:
 
   release:
     needs: build
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - name: Create release app token
@@ -79,6 +82,7 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
 
       - uses: actions/checkout@v7
         with:
