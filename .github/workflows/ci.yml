@@ -157,8 +157,13 @@ jobs:
       - name: Publish release
         if: github.event_name == 'workflow_dispatch' && inputs.candidate != ''
         env:
+          CANDIDATE: ${{ inputs.candidate }}
           GITHUB_TOKEN: ${{ steps.app.outputs.token }}
         run: |
+          git fetch origin main --tags
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          git merge-base --is-ancestor "$CANDIDATE" origin/main
+
           git config user.name presswerk-releases[bot]
           git config user.email 355333992+presswerk-releases[bot]@users.noreply.github.com
           nix run --inputs-from . presswerk -- publish HEAD
