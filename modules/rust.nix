@@ -105,7 +105,7 @@
         description=$(file -b "$binary")
         echo "$description"
         ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-          echo "$description" | grep -qi 'statically linked'
+          echo "$description" | grep -Eqi 'statically linked|static(-pie)? linked'
           ! readelf -d "$binary" | grep -q '(NEEDED)'
         ''}
         ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
