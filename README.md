@@ -1,5 +1,7 @@
 # ferret-ingest-agents
 
+<p><a href="https://presswerk.dev/"><picture><source media="(prefers-color-scheme: dark)" srcset="https://presswerk.dev/badge-light.svg"><img alt="Released with Presswerk" src="https://presswerk.dev/badge.svg" width="164" height="20"></picture></a> <img alt="Version" src=".github/presswerk-badge.svg" height="20"></p>
+
 <p><em>Everything you worked out with your coding agent, searchable.</em></p>
 
 ferret-ingest-agents reads the sessions of your coding agents and sends them to
@@ -121,7 +123,20 @@ ferret-ingest-agents run --dry-run   # what would be sent
 ferret-ingest-agents run
 ```
 
-Without Nix, `cargo install --git https://github.com/jkuball/ferret-ingest-agents`.
+Without Nix, install from a release archive or Cargo. Each
+[GitHub Release](https://github.com/jkuball/ferret-ingest-agents/releases) has a
+`.tar.gz` archive for `aarch64-darwin`, `x86_64-linux` and `aarch64-linux`.
+Choose the archive ending in your system, then extract and install its single
+executable:
+
+```sh
+tar -xzf ferret-ingest-agents-<target>.tar.gz
+install ferret-ingest-agents ~/.local/bin/
+```
+
+The Linux executables are fully static. The macOS executable only uses Apple
+system libraries. Alternatively, build from source with
+`cargo install --git https://github.com/jkuball/ferret-ingest-agents`.
 
 To keep ferret up to date, run it every few minutes, e.g. with cron
 (`crontab -e`) on macOS and Linux alike:
