@@ -1,10 +1,22 @@
 name: CI
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
+    inputs:
+      candidate:
+        description: Exact release commit to test and publish
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && github.ref || 'presswerk-release' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -18,14 +30,126 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.candidate || github.sha }}
+
+      - name: Verify candidate checkout
+        if: github.event_name == 'workflow_dispatch' && inputs.candidate != ''
+        env:
+          CANDIDATE: ${{ inputs.candidate }}
+        run: |
+          [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          test "$(git rev-parse --is-shallow-repository)" = false
+
       - uses: DeterminateSystems/determinate-nix-action@v3
       - uses: cachix/cachix-action@v17
         with:
           name: jkuball
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
           skipPush: true
-      - run: >
+
+      - name: Build and check
+        run: >
           nix run --inputs-from . nixpkgs#nix-fast-build --
           --flake ".#" --select 'flake: { inherit (flake) packages checks; }'
-          --no-nom --skip-cached
-          ${{ secrets.CACHIX_AUTH_TOKEN != '' && '--cachix-cache jkuball' || '' }}
+          --no-nom --out-link "$RUNNER_TEMP/result"
+          ${{ !(github.event_name == 'workflow_dispatch' && inputs.candidate != '') && '--skip-cached' || '' }}
+          ${{ secrets.CACHIX_AUTH_TOKEN != '' && '--cachix-cache jkuball --push-build-closure' || '' }}
+
+  release:
+    needs: build
+    permissions:
+      actions: write
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release app token
+        id: app
+        if: github.event_name != 'pull_request'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.candidate || github.sha }}
+          token: ${{ steps.app.outputs.token || github.token }}
+
+      - name: Verify candidate checkout
+        if: github.event_name == 'workflow_dispatch' && inputs.candidate != ''
+        env:
+          CANDIDATE: ${{ inputs.candidate }}
+        run: |
+          [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          test "$(git rev-parse --is-shallow-repository)" = false
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: cachix/cachix-action@v17
+        with:
+          name: jkuball
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: true
+
+      - name: Plan release
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          plan="$RUNNER_TEMP/presswerk-plan.txt"
+          status=0
+          nix run --inputs-from . presswerk -- plan > "$plan" 2>&1 || status=$?
+          cat "$plan"
+          {
+            echo '## Release plan'
+            echo
+            echo '```text'
+            cat "$plan"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Prepare release
+        if: github.event_name == 'push' && github.actor != 'presswerk-releases[bot]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          git fetch origin main --tags
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if test "$(git rev-parse origin/main)" != "$GITHUB_SHA"; then
+            echo "main advanced; leaving release work to the newer run"
+            exit 0
+          fi
+
+          git config user.name presswerk-releases[bot]
+          git config user.email 355333992+presswerk-releases[bot]@users.noreply.github.com
+
+          before=$(git rev-parse HEAD)
+          nix run --inputs-from . presswerk -- prepare
+          candidate=$(git rev-parse HEAD)
+          if test "$candidate" = "$before"; then
+            exit 0
+          fi
+
+          git push origin HEAD:main
+          gh workflow run ci.yml --ref main -f candidate="$candidate"
+
+      - name: Publish release
+        if: github.event_name == 'workflow_dispatch' && inputs.candidate != ''
+        env:
+          CANDIDATE: ${{ inputs.candidate }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          git fetch origin main --tags
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          git merge-base --is-ancestor "$CANDIDATE" origin/main
+
+          git config user.name presswerk-releases[bot]
+          git config user.email 355333992+presswerk-releases[bot]@users.noreply.github.com
+          nix run --inputs-from . presswerk -- publish HEAD
