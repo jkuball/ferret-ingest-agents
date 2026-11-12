@@ -140,14 +140,6 @@ jobs:
           git push origin HEAD:main
           gh workflow run ci.yml --ref main -f candidate="$candidate"
 
-      - name: Fetch release assets from Cachix
-        if: github.event_name == 'workflow_dispatch' && inputs.candidate != ''
-        run: |
-          nix build --no-link --print-build-logs \
-            .#packages.aarch64-darwin.release-archive \
-            .#packages.x86_64-linux.release-archive \
-            .#packages.aarch64-linux.release-archive
-
       - name: Publish release
         if: github.event_name == 'workflow_dispatch' && inputs.candidate != ''
         env:
