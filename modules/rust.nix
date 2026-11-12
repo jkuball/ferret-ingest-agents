@@ -10,67 +10,80 @@
     let
       crate = config.rust-project.crates.ferret-ingest-agents;
       craneLib = config.rust-project.crane-lib;
-      name = crate.cargoToml.package.name;
-      version = crate.cargoToml.package.version;
-      description = crate.cargoToml.package.description;
+      inherit (crate.cargoToml.package) name version description;
+
+      # Linux builds produce static musl binaries; Darwin builds natively.
       linuxTarget = {
         x86_64-linux = "x86_64-unknown-linux-musl";
         aarch64-linux = "aarch64-unknown-linux-musl";
       }.${system} or null;
-      targetKey = lib.toUpper (lib.replaceStrings [ "-" ] [ "_" ] (if linuxTarget == null then "" else linuxTarget));
-      linker = lib.getExe pkgs.pkgsStatic.stdenv.cc;
-      targetArgs = lib.optionalAttrs (linuxTarget != null) {
-        CARGO_BUILD_TARGET = linuxTarget;
-        "CARGO_TARGET_${targetKey}_LINKER" = linker;
-        "CC_${lib.replaceStrings [ "-" ] [ "_" ] linuxTarget}" = linker;
-        nativeBuildInputs = [ pkgs.pkgsStatic.stdenv.cc ];
-      };
+      targetArgs = lib.optionalAttrs (linuxTarget != null) (
+        let
+          linker = lib.getExe pkgs.pkgsStatic.stdenv.cc;
+          targetEnv = lib.replaceStrings [ "-" ] [ "_" ] linuxTarget;
+        in
+        {
+          CARGO_BUILD_TARGET = linuxTarget;
+          "CARGO_TARGET_${lib.toUpper targetEnv}_LINKER" = linker;
+          "CC_${targetEnv}" = linker;
+          nativeBuildInputs = [ pkgs.pkgsStatic.stdenv.cc ];
+        }
+      );
+
+      # Dependencies are built from manifests that pin this crate to 0.0.0,
+      # so a version bump alone does not invalidate the dependency cache.
+      dependencies =
+        let
+          isLocal = package: package.name == name && !(package ? source);
+          cargoLock = builtins.fromTOML (builtins.readFile (self + /Cargo.lock));
+          normalizedCargoLockData = cargoLock // {
+            package = map
+              (package:
+                if isLocal package then
+                  package // { version = "0.0.0"; }
+                else
+                  package)
+              cargoLock.package;
+          };
+          normalizedCargoLock = (pkgs.formats.toml { }).generate "Cargo.lock" normalizedCargoLockData;
+          dummyBuild = pkgs.writeText "dummy-build.rs" "fn main() {}\n";
+          normalizedCargoToml = (pkgs.formats.toml { }).generate "Cargo.toml" (
+            crate.cargoToml // {
+              package = crate.cargoToml.package // {
+                build = dummyBuild;
+                version = "0.0.0";
+              };
+            }
+          );
+        in
+        {
+          localPackages = builtins.filter isLocal cargoLock.package;
+          vendorDir = craneLib.vendorCargoDeps {
+            cargoLockParsed = normalizedCargoLockData;
+          };
+          source = pkgs.runCommand "source" { } ''
+            mkdir -p "$out/src"
+            cp ${normalizedCargoToml} "$out/Cargo.toml"
+            cp ${normalizedCargoLock} "$out/Cargo.lock"
+            printf 'fn main() {}\n' > "$out/src/main.rs"
+          '';
+        };
+
       commonArgs = crate.crane.args // targetArgs // {
         inherit version;
         pname = name;
         src = config.rust-project.src;
         cargoExtraArgs = "-p ${name}";
-        inherit cargoVendorDir;
+        cargoVendorDir = dependencies.vendorDir;
         strictDeps = true;
       };
-      dummyBuild = pkgs.writeText "dummy-build.rs" "fn main() {}\n";
-      normalizedCargoToml = (pkgs.formats.toml { }).generate "Cargo.toml" (
-        crate.cargoToml // {
-          package = crate.cargoToml.package // {
-            build = dummyBuild;
-            version = "0.0.0";
-          };
-        }
-      );
-      cargoLock = builtins.fromTOML (builtins.readFile (self + /Cargo.lock));
-      localPackages = builtins.filter (package: package.name == name && !(package ? source)) cargoLock.package;
-      normalizedCargoLockData = cargoLock // {
-        package = map
-          (package:
-            if package.name == name && !(package ? source) then
-              package // { version = "0.0.0"; }
-            else
-              package)
-          cargoLock.package;
-      };
-      normalizedCargoLock = (pkgs.formats.toml { }).generate "Cargo.lock" normalizedCargoLockData;
-      cargoVendorDir = craneLib.vendorCargoDeps {
-        cargoLockParsed = normalizedCargoLockData;
-      };
-      dependencySource = pkgs.runCommand "source" { } ''
-        mkdir -p "$out/src"
-        cp ${normalizedCargoToml} "$out/Cargo.toml"
-        cp ${normalizedCargoLock} "$out/Cargo.lock"
-        printf 'fn main() {}\n' > "$out/src/main.rs"
-      '';
       cargoArtifacts = craneLib.buildDepsOnly (builtins.removeAttrs commonArgs [ "src" ] // {
-        dummySrc = dependencySource;
+        dummySrc = dependencies.source;
         version = "0.0.0";
       });
-      package = craneLib.buildPackage (commonArgs // {
-        inherit cargoArtifacts;
-        meta = { inherit description; };
-      } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+
+      # Link Darwin binaries against the system libiconv so they run outside Nix.
+      portableDarwinArgs = lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
         postInstall = ''
           iconv=$(${pkgs.darwin.cctools}/bin/otool -L "$out/bin/${name}" \
             | awk '/\/nix\/store\/.*libiconv/{ print $1 }')
@@ -79,7 +92,13 @@
               -change "$iconv" /usr/lib/libiconv.2.dylib "$out/bin/${name}"
           fi
         '';
-      });
+      };
+      package = craneLib.buildPackage (commonArgs // {
+        inherit cargoArtifacts;
+        meta = { inherit description; };
+      } // portableDarwinArgs);
+
+      # Release archives hold just the binary and are checked as shipped.
       archive = pkgs.runCommand "${name}-${system}.tar.gz" { nativeBuildInputs = [ pkgs.gnutar ]; } ''
         tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner \
           -czf "$out" -C ${package}/bin ${name}
@@ -118,11 +137,12 @@
         ''}
         touch "$out"
       '';
-      dependencyCheck = assert builtins.length localPackages == 1;
+
+      dependencyCheck = assert builtins.length dependencies.localPackages == 1;
         assert cargoArtifacts.version == "0.0.0";
         pkgs.runCommand "${name}-dependency-cache-check" { } ''
-          grep -q '^version = "0.0.0"$' ${dependencySource}/Cargo.toml
-          grep -A1 '^name = "${name}"$' ${dependencySource}/Cargo.lock \
+          grep -q '^version = "0.0.0"$' ${dependencies.source}/Cargo.toml
+          grep -A1 '^name = "${name}"$' ${dependencies.source}/Cargo.lock \
             | grep -q '^version = "0.0.0"$'
           touch "$out"
         '';
